@@ -1,7 +1,7 @@
 var AWS = require('aws-sdk');
 var dynamodb = new AWS.DynamoDB.DocumentClient();
 
-const tableName = "UserStats"
+const tableName = "UserStats";
 
 /* Example DynamoDB Parameters
 
