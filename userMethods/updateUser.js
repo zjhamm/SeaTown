@@ -2,6 +2,7 @@ var AWS = require("aws-sdk");
 var dynamodb = new AWS.DynamoDB.DocumentClient();
 
 const userStatsTable = "UserStats";
+const wodsTable = "WoDs";
 
 exports.handler = (event, context, callback) => {
   let response = {
@@ -12,88 +13,192 @@ exports.handler = (event, context, callback) => {
   };
 
   let workoutName = "";
-  let personalRecord = "";
-  let notes = "";
-  let dateCompleted = "";
-  let expressionValues = {};
+  let userName = "";
 
-  let updateExpression = "SET ";
+  if (event.pathParameters.username && event.queryPathParameters.workoutName && event.queryPathParameters.score) {
+    [workoutName, userName] = [event.queryPathParameters.workoutName, event.pathParameters.username]
 
-  if (event.queryPathParameters.workoutName) {
-    workoutName = event.queryPathParameters.workoutName;
+    // Remove workout name from query params so that it does not become part of the workoutMap
+    delete event.queryPathParameters.workoutName;
 
-    event.queryPathParameters.forEach(parameter => {
-        if (parameter) {
-            updateExpression += `${workoutName}.${parameter} = :${parameter},`;
-            expressionValues[`:${parameter}`] = parameter;
-        }
+    getUserScore(userName, workoutName).then(userScore => {
+      if (userScore) {
+        response["body"] = "updateUserWorkout ";
+        response["body"] += updateUserWorkout(userName, workoutName, userScore, event);
+        callback(null, response);
+      } else {
+        response["body"] = "createUserWorkout ";
+        response["body"] += createUserWorkout(userName, workoutName, event);
+        callback(null, response);
+      }
+    }).catch(err => {
+      response["body"] = "error ";
+      response["body"] += "Error while attempting to get user information: " + err;
+      callback(null, response);
     });
-
-    // if (event.queryPathParameters.personalRecord) {
-    //   personalRecord = event.queryPathParameters.personalRecord;
-    //   updateExpression += `${workoutName}.personalRecord = :personalRecord,`;
-    //   expressionValues[":personalRecord"] = personalRecord;
-    // }
-    // if (event.queryPathParameters.notes) {
-    //   notes = event.queryPathParameters.notes;
-    //   updateExpression += `${workoutName}.notes = :notes,`;
-    //   expressionValues[":notes"] = notes;
-    // }
-    // if (event.queryPathParameters.dateCompleted) {
-    //   dateCompleted = event.queryPathParameters.dateCompleted;
-    //   updateExpression += `${workoutName}.dateCompleted = :dateCompleted,`;
-    //   expressionValues[":dateCompleted"] = dateCompleted;
-    // }
   } else {
-    response["body"] = "WorkoutName was empty or null";
+    response["body"] = "blah ";
+    response["body"] += "WorkoutName was empty or null";
     callback(null, response);
   }
+};
 
-  // var params = {
-  //     TableName: 'Image',
-  //     Key: {
-  //         Id: 'dynamodb.png'
-  //     },
-  //     UpdateExpression: 'SET address.province = :ma',
-  //     ConditionExpression: 'attribute_not_exists(address.province)',
-  //     ExpressionAttributeValues: {
-  //         ':ma': 'MA'
-  //     },
-  //     ReturnValues: 'ALL_NEW'
-  // };
+async function updateUserWorkout(userName, workoutName, userScore, event) {
+  /*
+    If user has performed workout, update score if necessary
+    SET ${workoutName}.score = :score,${workoutName}.notes = :notes,${workoutName}.date_completed = :date_completed
+    where :score = "122", :notes = "blah", and :date_completed = "2018-05-18"
+  */
 
+  let updateExpression = `SET `;
+  let expressionValues = {};
 
-//   expressionValues = {
-//       ":wod": {
-//           "personalRecord": "12:40",
-//           "dateCompleted": "2018-05-01",
-//           "notes": "I DID IT!!!!"
-//       }
-//   }
+  for (let queryParam in event.queryPathParameters) {
+    updateExpression += `${workoutName}.${queryParam} = :${queryParam},`;
+    expressionValues[`:${queryParam}`] = event.queryPathParameters[queryParam];
+  }
+
+  if (userScore <= event.queryPathParameters.score) {
+    console.log("Old score is less");
+  }
+  else {
+    console.log("Old score is greater");
+  }
+
+  console.log("Update expression: " + updateExpression);
+  console.log("ExpressionValues: " + expressionValues);
 
   const dynamoParams = {
     TableName: userStatsTable,
     Key: {
-      username: event.pathParameters.username
+      username: userName
     },
     UpdateExpression: updateExpression.replace(/,\s*$/, ""),
-    //UpdateExpression: `SET ${workoutName} :wod`,
-    // ConditionExpression: `attribute_not_exists(${workoutName})`,
     ExpressionAttributeValues: expressionValues,
     ReturnValues: "UPDATED_NEW"
   };
 
+  const conditionExpression = await generateConditionExpression(workoutName);
+  if (conditionExpression) {
+    dynamoParams.ConditionalExpression = conditionExpression;
+    //dynamoParams.ExpressionAttributeValues[":oldScore"] = userScore;
+  }
+
+  return await updateUserStats(dynamoParams);
+}
+
+async function generateConditionExpression(workoutName, userScore) {
+  let conditionExpression = "";
+
+  let workoutType = await getWorkoutType(workoutName);
+
+  console.log("workoutType: ", workoutType);
+  console.log('user score: ', userScore);
+  if (workoutType === "reps") {
+    conditionExpression = `attribute_exists(${workoutName}.score) AND (${workoutName}.score <= :score)`;
+  } else {
+    conditionExpression = `attribute_exists(${workoutName}.score) AND (${workoutName}.score >= :score)`;
+  }
+
+  console.log("conditionExpression: ", conditionExpression);
+  return conditionExpression;
+}
+
+// If user has not previously performed workout then add blank workout to user
+async function createUserWorkout(userName, workoutName, event) {
+  /*
+    If user has not performed workout, assign workoutName to a map
+    SET ${workoutName} = :workoutMap
+    where :workoutMap = {
+      "date_completed": "2018-05-18", (required)
+      "notes": "I suck at crossfit", (optional)
+      "score": "221" (required)
+    }
+  */
+
+  //If user has previously performed workout then construct dynamic workoutMap based off provided query params
+  const newWorkoutMap = {};
+  for (let queryParam in event.queryPathParameters) {
+    newWorkoutMap[queryParam] = event.queryPathParameters[queryParam];
+  }
+
+
+  console.log(newWorkoutMap);
+
+  let updateExpression = `SET ${workoutName} = :newWorkoutMap`;
+  let expressionValues = {
+    ':newWorkoutMap': newWorkoutMap
+  };
+
+  const dynamoParams = {
+    TableName: userStatsTable,
+    Key: {
+      username: userName
+    },
+    UpdateExpression: updateExpression,
+    ExpressionAttributeValues: expressionValues,
+    ReturnValues: "UPDATED_NEW"
+  };
+
+  return await updateUserStats(dynamoParams);
+}
+
+async function updateUserStats(dynamoParams) {
   console.log("PARAMS: ", dynamoParams);
 
-  dynamodb.update(dynamoParams, function(err, data) {
+  return await dynamodb.update(dynamoParams, function (err, data) {
     if (err) {
-      response["body"] =
-        "Unable to update item. Error JSON: " + JSON.stringify(err, null, 2);
-      callback(null, response);
+      console.log("err: ", err);
+      return "Unable to update item. Error JSON: " + JSON.stringify(err, null, 2);
     } else {
-      response["body"] =
-        "Successfully updated user! " + JSON.stringify(data, null, 2);
-      callback(null, response);
+      console.log("Woot: ", data);
+      return "Successfully updated user! " + JSON.stringify(data, null, 2);
     }
   });
-};
+}
+
+async function getWorkoutType(wodName) {
+  let workoutType = '';
+  let dynamoParams = {
+    TableName: wodsTable,
+    KeyConditionExpression: "wodName = :wodName",
+    ExpressionAttributeValues: {
+      ":wodName": wodName
+    }
+  }
+
+  console.log("wodName: ", wodName);
+
+  await dynamodb.query(dynamoParams).promise()
+    .then(function (data) {
+      console.log("wodInfo: ", data.Items);
+      if (data.Items) {
+        workoutType = data.Items[0].type;
+      }
+    });
+
+  return workoutType;
+}
+
+async function getUserScore(user, workoutName) {
+  let userScore = null;
+  let dynamoParams = {
+    TableName: userStatsTable,
+    KeyConditionExpression: "username = :username",
+    ExpressionAttributeValues: {
+      ":username": user
+    }
+  }
+
+  console.log("workoutName: ", workoutName);
+
+  await dynamodb.query(dynamoParams).promise()
+    .then(function (data) {
+      console.log('ITEMS:', data.Items[0]);
+      if (data.Items && workoutName in data.Items[0]) {
+        userScore = data.Items[0][workoutName].score;
+      }
+    });
+
+  return userScore;
+}
