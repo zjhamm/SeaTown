@@ -21,23 +21,29 @@ exports.handler = (event, context, callback) => {
 
   if (event.queryPathParameters.workoutName) {
     workoutName = event.queryPathParameters.workoutName;
-    // expressionValues["workoutName"] = workoutName;
 
-    if (event.queryPathParameters.personalRecord) {
-      personalRecord = event.queryPathParameters.personalRecord;
-      updateExpression += `${workoutName}.personalRecord = :personalRecord,`;
-      expressionValues[":personalRecord"] = personalRecord;
-    }
-    if (event.queryPathParameters.notes) {
-      notes = event.queryPathParameters.notes;
-      updateExpression += `${workoutName}.notes = :notes,`;
-      expressionValues[":notes"] = notes;
-    }
-    if (event.queryPathParameters.dateCompleted) {
-      dateCompleted = event.queryPathParameters.dateCompleted;
-      updateExpression += `${workoutName}.dateCompleted = :dateCompleted,`;
-      expressionValues[":dateCompleted"] = dateCompleted;
-    }
+    event.queryPathParameters.forEach(parameter => {
+        if (parameter) {
+            updateExpression += `${workoutName}.${parameter} = :${parameter},`;
+            expressionValues[`:${parameter}`] = parameter;
+        }
+    });
+
+    // if (event.queryPathParameters.personalRecord) {
+    //   personalRecord = event.queryPathParameters.personalRecord;
+    //   updateExpression += `${workoutName}.personalRecord = :personalRecord,`;
+    //   expressionValues[":personalRecord"] = personalRecord;
+    // }
+    // if (event.queryPathParameters.notes) {
+    //   notes = event.queryPathParameters.notes;
+    //   updateExpression += `${workoutName}.notes = :notes,`;
+    //   expressionValues[":notes"] = notes;
+    // }
+    // if (event.queryPathParameters.dateCompleted) {
+    //   dateCompleted = event.queryPathParameters.dateCompleted;
+    //   updateExpression += `${workoutName}.dateCompleted = :dateCompleted,`;
+    //   expressionValues[":dateCompleted"] = dateCompleted;
+    // }
   } else {
     response["body"] = "WorkoutName was empty or null";
     callback(null, response);

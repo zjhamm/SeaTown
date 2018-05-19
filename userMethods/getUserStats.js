@@ -40,9 +40,7 @@ exports.handler = (event, context, callback) => {
 function generateResponse(body) {
     return {
         "statusCode": 200,
-        "headers": {
-            "my_header": "my_value"
-        },
+        "headers": {},
         "body": JSON.stringify(body),
         "isBase64Encoded": false
     };
