@@ -15,41 +15,98 @@ exports.handler = (event, context, callback) => {
   let workoutName = "";
   let userName = "";
 
-  if (event.pathParameters.username && event.queryPathParameters.workoutName && event.queryPathParameters.score) {
+  // Verify that the request has the required query parameters
+  // Otherwise, return without doing anything
+  if (event.pathParameters.username && event.queryPathParameters.workoutName) {
     [workoutName, userName] = [event.queryPathParameters.workoutName, event.pathParameters.username]
 
     // Remove workout name from query params so that it does not become part of the workoutMap
     delete event.queryPathParameters.workoutName;
 
-    getUserScore(userName, workoutName).then(userScore => {
-      if (userScore) {
-        response["body"] = "updateUserWorkout ";
-        response["body"] += updateUserWorkout(userName, workoutName, userScore, event);
-        callback(null, response);
-      } else {
-        response["body"] = "createUserWorkout ";
-        response["body"] += createUserWorkout(userName, workoutName, event);
+    // If the createUserWorkout request succeeded, respond back with a success
+    // Otherwise, try to run updateUserWorkout
+    // Finally, if there was an error to be caught, return a 500 with the error
+    createUserWorkout(userName, workoutName, event).then(updateResponse => {
+      if (updateResponse.code !== "ConditionalCheckFailedException") {
+        response.body = "Created";
         callback(null, response);
       }
+      else {
+        updateUserWorkout(userName, workoutName, event).then(createUserResponse => {
+          response.body = "Updated";
+          callback(null, response);
+        });
+      }
     }).catch(err => {
-      response["body"] = "error ";
-      response["body"] += "Error while attempting to get user information: " + err;
+      response.statusCode = 500;
+      response.body = "Error while attempting to update the users score: " + err;
       callback(null, response);
     });
   } else {
-    response["body"] = "blah ";
-    response["body"] += "WorkoutName was empty or null";
+    response.statusCode = 400;
+    response.body = "Missing params";
     callback(null, response);
   }
 };
 
-async function updateUserWorkout(userName, workoutName, userScore, event) {
-  /*
-    If user has performed workout, update score if necessary
-    SET ${workoutName}.score = :score,${workoutName}.notes = :notes,${workoutName}.date_completed = :date_completed
-    where :score = "122", :notes = "blah", and :date_completed = "2018-05-18"
-  */
+/**
+ * Adds a new map to the users WoD based on the workoutName passed in. This will overwrite any previous entry
+ * so it should only get called if the user didn't previously have the workoutName as an entry.
+ *
+ * Conditions to succeed:
+ *    - WoD cannot already exist for the given user
+ *
+ * @param {*} userName
+ * @param {*} workoutName
+ * @param {*} event
+ *
+ * @return {*} Object returned from DynamoDB
+ */
+async function createUserWorkout(userName, workoutName, event) {
 
+  const workoutStats = {};
+  for (let queryParam in event.queryPathParameters) {
+    workoutStats[queryParam] = event.queryPathParameters[queryParam];
+  }
+
+  let updateExpression = `SET ${workoutName} = :workoutStats`;
+  let expressionValues = {
+    ':workoutStats': workoutStats
+  };
+
+  const dynamoParams = {
+    TableName: userStatsTable,
+    Key: {
+      username: userName
+    },
+    UpdateExpression: updateExpression,
+    ConditionExpression: `attribute_not_exists(${workoutName})`,
+    ExpressionAttributeValues: expressionValues,
+    ReturnValues: "UPDATED_NEW"
+  };
+
+  return await updateDynamoDB(dynamoParams);
+}
+
+/**
+ * Updates the given WoD on the users entry. This method only updates the fields that
+ * are found in the queryPathParameters, but only if the ConditionExpression comes back as true.
+ * Any missing fields will be left as is should the request succeed. We only need to check
+ * the ConditionExpression when the score is present because the user could just be updating
+ * their notes and we want to update those no matter what
+ *
+ * Conditions to succeed:
+ *    - If the request has a new score, the score must be better than the previous
+ *
+ *
+ * @param {*} userName
+ * @param {*} workoutName
+ * @param {*} userScore
+ * @param {*} event
+ *
+ * @return {*} Object returned from DynamoDB
+ */
+async function updateUserWorkout(userName, workoutName, event) {
   let updateExpression = `SET `;
   let expressionValues = {};
 
@@ -57,16 +114,6 @@ async function updateUserWorkout(userName, workoutName, userScore, event) {
     updateExpression += `${workoutName}.${queryParam} = :${queryParam},`;
     expressionValues[`:${queryParam}`] = event.queryPathParameters[queryParam];
   }
-
-  if (userScore <= event.queryPathParameters.score) {
-    console.log("Old score is less");
-  }
-  else {
-    console.log("Old score is greater");
-  }
-
-  console.log("Update expression: " + updateExpression);
-  console.log("ExpressionValues: " + expressionValues);
 
   const dynamoParams = {
     TableName: userStatsTable,
@@ -78,91 +125,63 @@ async function updateUserWorkout(userName, workoutName, userScore, event) {
     ReturnValues: "UPDATED_NEW"
   };
 
-  const conditionExpression = await generateConditionExpression(workoutName);
-  if (conditionExpression) {
-    dynamoParams.ConditionalExpression = conditionExpression;
-    dynamoParams.ExpressionAttributeName = {
-      "#score": "score"
+  if (event.queryPathParameters.score) {
+    const conditionExpression = await generateConditionExpression(workoutName);
+    if (conditionExpression) {
+      dynamoParams.ConditionExpression = conditionExpression;
     }
-    //dynamoParams.ExpressionAttributeValues[":oldScore"] = userScore;
   }
 
-  return await updateUserStats(dynamoParams);
+  return await updateDynamoDB(dynamoParams);
 }
 
-async function generateConditionExpression(workoutName, userScore) {
-  let conditionExpression = "";
+/**
+ * Determines which conditional expression needs to be generated based on the workoutType
+ *    e.g. If the workout is reps based, we should only update if the score is higher
+ *
+ * @param {*} workoutName - Name of the WoD were getting the type of
+ *
+ * @return conditionExpression - String representation of the ConditionExpression
+ */
+async function generateConditionExpression(workoutName) {
 
-  let workoutType = await getWorkoutType(workoutName);
+  const workoutType = await getWorkoutType(workoutName);
 
-  console.log("workoutType: ", workoutType);
-  console.log('user score: ', userScore);
   if (workoutType === "reps") {
-    conditionExpression = "#score <= :score";
+    return `attribute_exists(${workoutName}) AND ${workoutName}.score <= :score`;
   } else {
-    conditionExpression = "#score >= :score";
+    return `attribute_exists(${workoutName}) AND ${workoutName}.score >= :score`;
   }
-
-  console.log("conditionExpression: ", conditionExpression);
-  return conditionExpression;
 }
 
-// If user has not previously performed workout then add blank workout to user
-async function createUserWorkout(userName, workoutName, event) {
-  /*
-    If user has not performed workout, assign workoutName to a map
-    SET ${workoutName} = :workoutMap
-    where :workoutMap = {
-      "date_completed": "2018-05-18", (required)
-      "notes": "I suck at crossfit", (optional)
-      "score": "221" (required)
-    }
-  */
+/**
+ * Sends an update request to DynamoDB based on the parameters passed in
+ *
+ * @param {*} dynamoParams
+ *
+ * @return {*} Object returned from DynamoDB
+ */
+async function updateDynamoDB(dynamoParams) {
 
-  //If user has previously performed workout then construct dynamic workoutMap based off provided query params
-  const newWorkoutMap = {};
-  for (let queryParam in event.queryPathParameters) {
-    newWorkoutMap[queryParam] = event.queryPathParameters[queryParam];
-  }
-
-
-  console.log(newWorkoutMap);
-
-  let updateExpression = `SET ${workoutName} = :newWorkoutMap`;
-  let expressionValues = {
-    ':newWorkoutMap': newWorkoutMap
-  };
-
-  const dynamoParams = {
-    TableName: userStatsTable,
-    Key: {
-      username: userName
-    },
-    UpdateExpression: updateExpression,
-    ExpressionAttributeValues: expressionValues,
-    ReturnValues: "UPDATED_NEW"
-  };
-
-  return await updateUserStats(dynamoParams);
+  return await dynamodb.update(dynamoParams).promise()
+    .then(data => {
+      return data;
+    })
+    .catch(err => {
+      return err;
+    });
 }
 
-async function updateUserStats(dynamoParams) {
-  console.log("PARAMS: ", dynamoParams);
-
-  return await dynamodb.update(dynamoParams, function (err, data) {
-    if (err) {
-      console.log("err: ", err);
-      return "Unable to update item. Error JSON: " + JSON.stringify(err, null, 2);
-    } else {
-      console.log("Woot: ", data);
-      return "Successfully updated user! " + JSON.stringify(data, null, 2);
-    }
-  });
-}
-
+/**
+ * Fetches the workout type for the given WoD so we can
+ * determine how to compare the score
+ *
+ * @param {*} wodName
+ *
+ * @return {*} WoD type or error object
+ */
 async function getWorkoutType(wodName) {
-  let workoutType = '';
-  let dynamoParams = {
+  const dynamoParams = {
     TableName: wodsTable,
     KeyConditionExpression: "wodName = :wodName",
     ExpressionAttributeValues: {
@@ -170,38 +189,11 @@ async function getWorkoutType(wodName) {
     }
   }
 
-  console.log("wodName: ", wodName);
-
-  await dynamodb.query(dynamoParams).promise()
-    .then(function (data) {
-      console.log("wodInfo: ", data.Items);
-      if (data.Items) {
-        workoutType = data.Items[0].type;
-      }
+  return await dynamodb.query(dynamoParams).promise()
+    .then(data => {
+      return data.Items[0].type;
+    })
+    .catch(err => {
+      return err;
     });
-
-  return workoutType;
-}
-
-async function getUserScore(user, workoutName) {
-  let userScore = null;
-  let dynamoParams = {
-    TableName: userStatsTable,
-    KeyConditionExpression: "username = :username",
-    ExpressionAttributeValues: {
-      ":username": user
-    }
-  }
-
-  console.log("workoutName: ", workoutName);
-
-  await dynamodb.query(dynamoParams).promise()
-    .then(function (data) {
-      console.log('ITEMS:', data.Items[0]);
-      if (data.Items && workoutName in data.Items[0]) {
-        userScore = data.Items[0][workoutName].score;
-      }
-    });
-
-  return userScore;
 }
