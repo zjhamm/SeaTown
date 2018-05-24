@@ -15,8 +15,7 @@ exports.handler = function(event, context, callback) {
     const params = {
         TableName: tableName,
         Item: {
-            "username": event.pathParameters.username,
-            'wods': {}
+            "username": event.pathParameters.username
         }
     };
 
