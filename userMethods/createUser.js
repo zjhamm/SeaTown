@@ -1,32 +1,80 @@
 const AWS = require('aws-sdk');
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 
-const tableName = 'UserStats';
+const StatusCodes = Object.freeze({ "USER_EXISTS": 200, "USER_CREATED": 201, "ERROR": 500 });
+const tableName = process.env.UserStatsTable;
+const primaryKey = process.env.PrimaryKey;
 
-exports.handler = function(event, context, callback) {
+exports.handler = async (event) => {
+  try {
+    return createUser(event);
+  } catch (error) {
+    return generateResponse(StatusCodes.ERROR, error);
+  }
+}
 
-    let response = {
-        "statusCode": 200,
-        "headers": {},
-        "body": "",
-        "isBase64Encoded": false
-    };
+async function createUser(event) {
 
-    const params = {
-        TableName: tableName,
-        Item: {
-            "username": event.pathParameters.username
-        }
-    };
+  let response = {};
+  let userExists = await doesUserExist(event);
 
-    dynamodb.put(params, function(err, data) {
-        if (err) {
-            response['body'] = "Unable to add item. Error JSON: " + JSON.stringify(err, null, 2);
-            callback(null, response);
-        }
-        else {
-            response['body'] = 'Successfully created new user!' + JSON.stringify(data, null, 2);
-            callback(null, response);
-        }
+  if (!userExists) {
+    response = await createDynamoEntry(event);
+  }
+  else {
+    response = generateResponse(StatusCodes.USER_EXISTS, "User already exists");
+  }
+
+  return response;
+}
+
+async function doesUserExist(event) {
+  let dynamoParams = {
+    TableName: tableName,
+    KeyConditionExpression: "#username = :username",
+    ExpressionAttributeNames: {
+      "#username": primaryKey
+    },
+    ExpressionAttributeValues: {
+      ":username": event.pathParameters.username
+    }
+  };
+
+  return await dynamodb.query(dynamoParams).promise()
+    .then(data => {
+      if (data.Items.length == 0) {
+        return false;
+      }
+
+      return true;
+    })
+    .catch(err => {
+      throw(err);
     });
+}
+
+async function createDynamoEntry(event) {
+  const dynamoParams = {
+    TableName: tableName,
+    Item: {
+      [primaryKey]: username
+    }
+  };
+
+  return await dynamodb.put(dynamoParams).promise()
+    .then(data => {
+      return generateResponse(StatusCodes.USER_CREATED, "User Created");
+    })
+    .catch(err => {
+      throw(err);
+    })
+}
+
+function generateResponse(statusCode, body) {
+  return {
+    "statusCode": statusCode,
+    "headers": {},
+    "body": JSON.stringify(body),
+    "isBase64Encoded": false
+  };
 }
