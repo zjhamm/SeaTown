@@ -1,7 +1,7 @@
 var AWS = require('aws-sdk');
 var dynamodb = new AWS.DynamoDB.DocumentClient();
 
-const tableName = "UserStats"
+const tableName = "UserStats";
 
 /* Example DynamoDB Parameters
 
@@ -40,9 +40,7 @@ exports.handler = (event, context, callback) => {
 function generateResponse(body) {
     return {
         "statusCode": 200,
-        "headers": {
-            "my_header": "my_value"
-        },
+        "headers": {},
         "body": JSON.stringify(body),
         "isBase64Encoded": false
     };
