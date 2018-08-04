@@ -63,9 +63,6 @@ async function createWorkout(event) {
     return generateResponse(StatusCodes.MISSING_PARAMETERS, "Missing the following parameters: " + missingParameters);
   }
 
-  
-
-  console.log("Attempting to connect to dynamo");
   return await createWorkoutInDynamo(body);
 }
 
@@ -78,45 +75,33 @@ async function createWorkoutInDynamo(body) {
     Item: item
   }
 
-  console.log("dynamoParams", dynamoParams);
-
   return await dynamodb.put(dynamoParams).promise()
     .then(data => {
-      console.log("Got data: " + data);
       return generateResponse(StatusCodes.WORKOUT_CREATED, "Workout successfully created!");
     })
     .catch(err => {
-      console.log("Got an error" + err);
       return generateResponse(StatusCodes.ERROR, err);
     });
 }
 
 function generateItem(body) {
 
-  console.log("body", body);
   let item = {};
 
   let workoutType = body[WORKOUT_TYPE];
   let workoutTypeRequirements = requiredParametersByWorkoutType[workoutType];
-  console.log('workout_type', workoutType);
-  console.log('required params', workoutTypeRequirements);
 
   for (var i in workoutTypeRequirements) {
     let requiredParam = workoutTypeRequirements[i];
-    console.log("Adding required item[" + requiredParam + "] = " + body[requiredParam]);
     item[requiredParam] = body[requiredParam];
   }
 
   for (var i in optionalParameters) {
     let optionalParam = optionalParameters[i];
     if (body.hasOwnProperty(optionalParam)) {
-      
-      console.log("Adding optional item[" + optionalParam + "] = " + body[optionalParam]);
       item[optionalParam] = body[optionalParam];
     }
   }
-
-  console.log("item:", item);
 
   return item;
 }
@@ -125,13 +110,11 @@ function getBodyAndWorkoutType(event) {
 
   let body = JSON.parse(event.body);
   if (body === null) {
-    console.log("Body is null");
     return [null, null];
   }
   
   let workoutType = body[WORKOUT_TYPE];
   if (workoutType === null || !requiredParametersByWorkoutType.hasOwnProperty(workoutType)) {
-    console.log("WorkoutType is null");
     return [body, null];
   }
 
