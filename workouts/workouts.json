@@ -1,0 +1,44 @@
+Chipper - chip away at the movements, no real structure
+{
+  "name": "blah",
+  "type": "chipper",
+  "score_type": "time",
+  "notes": "Anytime you stop do 5 burpees",
+  "movements": [...]
+}
+
+EMOM - has a total time, can put specifics like `E2MOM` or `after every minute do blah` in the notes
+{
+  "name": "blah",
+  "type": "emom",
+  "score_type": "completion",
+  "notes": "Every 30 seconds fart",
+  "movements": [...]
+}
+
+Rounds - has how many rounds to complete
+{
+  "name": "blah",
+  "type": "rounds",
+  "quantity": "5", // 5 rounds
+  "score_type": "time",
+  "notes": "",
+  "movements": [...]
+}
+
+Reps - Do this many reps for each
+{
+  "name": "blah",
+  "type": "reps",
+  "quantity": "10-9-8-7-6-5-4-3-2-1",
+  "score_type": "time",
+  "notes": "Don't suck",
+  "movements": [...]
+}
+
+Custom - Anything else, type whatever
+{
+  "name": "blah",
+  "type": "custom",
+  "workout": "12 pull ups\n5 cal row..."
+}
